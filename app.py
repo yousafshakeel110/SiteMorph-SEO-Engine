@@ -19,34 +19,29 @@ def img_to_b64(img):
     return base64.b64encode(buf.getvalue()).decode()
 
 MASTER_PROMPT = """
-You are a senior front-end engineer.
+Convert the homepage screenshot into FULL HTML + CSS.
+This is a LOCKED MASTER TEMPLATE.
 
-TASK:
-- Convert homepage screenshot into FULL HTML + FULL CSS
-- This is a MASTER TEMPLATE
-- Use placeholders like:
-  {{H1}}, {{INTRO}}, {{SECTION_1}}, {{FAQ}}, {{CTA}}, {{SCHEMA}}
-- DO NOT hardcode content
-- DO NOT explain
-- DO NOT change layout later
+Rules:
+- Use semantic HTML5
+- Use embedded CSS
+- Add placeholders: {{H1}}, {{INTRO}}, {{SECTION1}}, {{FAQ}}, {{CTA}}, {{SCHEMA}}
+- Do not add real content
+- Keep layout, colors, fonts, images same
 - Mobile + desktop responsive
-- Keep images, icons, CTAs exactly same
 
-Return ONLY HTML with embedded CSS.
+Return ONLY HTML.
 """
 
 CONTENT_PROMPT = """
-You are an SEO content strategist.
+Fill ONLY placeholders in the given HTML.
+Do NOT change layout, CSS, images.
 
-Fill ONLY the placeholders in the provided HTML.
-Do NOT touch CSS, layout, images or structure.
-
-SEO REQUIREMENTS:
+SEO:
 - NLP optimized
-- Semantic SEO
 - Local SEO
 - Meta title & description
-- FAQ + JSON-LD schema
+- JSON-LD schema
 
 Keyword: {kw}
 City: {city}
@@ -61,11 +56,8 @@ Return FULL HTML.
 
 api_key = st.text_input("OpenAI API Key", type="password")
 language = st.selectbox("Language", ["English","Urdu","Arabic","Spanish","Korean","Filipino"])
-
 homepage_img = st.file_uploader("Upload Homepage Screenshot", type=["png","jpg","jpeg"])
-
-csv_file = st.file_uploader("Upload CSV (keyword,city)", type=["csv"])
-manual_kw = st.text_area("Or paste keywords (keyword | city)")
+csv_file = st.file_uploader("CSV (keyword,city)", type=["csv"])
 
 generate = st.button("Generate Pages")
 
@@ -75,57 +67,87 @@ generate = st.button("Generate Pages")
 
 if generate:
     if not api_key or not homepage_img:
-        st.error("API key & homepage required")
+        st.error("API key & homepage screenshot required")
         st.stop()
 
     client = OpenAI(api_key=api_key)
 
-    img = Image.open(homepage_img)
-    img_b64 = img_to_b64(img)
-
     # STEP 1: MASTER TEMPLATE
-    with st.spinner("Locking master design..."):
-        master = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{
-                "role":"user",
-                "content":[
-                    {"type":"text","text":MASTER_PROMPT},
-                    {"type":"image_url","image_url":{"url":f"data:image/png;base64,{img_b64}"}}
-                ]
-            }],
-            temperature=0.1
-        ).choices[0].message.content
+    try:
+        img = Image.open(homepage_img)
+        img_b64 = img_to_b64(img)
 
-    rows = []
-
-    if csv_file:
-        reader = csv.DictReader(io.StringIO(csv_file.getvalue().decode()))
-        for r in reader:
-            rows.append((r["keyword"], r["city"]))
-    else:
-        for line in manual_kw.splitlines():
-            if "|" in line:
-                k,c = line.split("|")
-                rows.append((k.strip(), c.strip()))
-
-    zip_buf = io.BytesIO()
-
-    # STEP 2: CONTENT INJECTION
-    with zipfile.ZipFile(zip_buf,"w") as zipf:
-        for kw, city in rows:
-            html = client.chat.completions.create(
+        with st.spinner("Creating master template..."):
+            master_res = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{
                     "role":"user",
-                    "content": master + CONTENT_PROMPT.format(
-                        kw=kw, city=city, lang=language
-                    )
+                    "content":[
+                        {"type":"text","text":MASTER_PROMPT},
+                        {"type":"image_url","image_url":{"url":f"data:image/png;base64,{img_b64}"}}
+                    ]
                 }],
-                temperature=0.4
-            ).choices[0].message.content
+                temperature=0.1
+            )
 
-            zipf.writestr(f"{slugify(kw)}-{slugify(city)}.html", html)
+        master_html = master_res.choices[0].message.content.strip()
 
-    st.success("Exact design pages generated.")
+        if len(master_html) < 500:
+            st.error("Master template generation failed.")
+            st.stop()
+
+        st.subheader("Master Template Preview")
+        st.code(master_html[:2000], language="html")
+
+    except Exception as e:
+        st.error(f"Template error: {e}")
+        st.stop()
+
+    # STEP 2: READ CSV
+    rows = []
+    try:
+        reader = csv.DictReader(io.StringIO(csv_file.getvalue().decode()))
+        for r in reader:
+            rows.append((r["keyword"], r["city"]))
+    except:
+        st.error("Invalid CSV. Required columns: keyword, city")
+        st.stop()
+
+    if not rows:
+        st.error("No keywords found.")
+        st.stop()
+
+    zip_buf = io.BytesIO()
+
+    # STEP 3: GENERATE PAGES
+    with zipfile.ZipFile(zip_buf,"w") as zipf:
+        for kw, city in rows:
+            try:
+                page_res = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{
+                        "role":"user",
+                        "content": master_html + CONTENT_PROMPT.format(
+                            kw=kw, city=city, lang=language
+                        )
+                    }],
+                    temperature=0.4
+                )
+
+                page_html = page_res.choices[0].message.content.strip()
+
+                if len(page_html) < 500:
+                    st.warning(f"Skipped: {kw} ({city}) – empty content")
+                    continue
+
+                zipf.writestr(f"{slugify(kw)}-{slugify(city)}.html", page_html)
+
+            except Exception as e:
+                st.warning(f"Failed: {kw} ({city}) – {e}")
+
+    if zip_buf.getbuffer().nbytes < 100:
+        st.error("ZIP is empty. No pages generated.")
+        st.stop()
+
+    st.success("Pages generated successfully.")
     st.download_button("Download ZIP", zip_buf.getvalue(), "pages.zip")
