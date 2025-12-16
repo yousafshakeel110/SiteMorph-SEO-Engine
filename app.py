@@ -4,26 +4,23 @@ import pandas as pd
 from io import BytesIO
 from openai import OpenAI
 
-st.set_page_config(page_title="Inline HTML SEO Generator", layout="wide")
-st.title("Premium Inline HTML SEO Page Generator")
+st.set_page_config(page_title="File Upload SEO Generator", layout="wide")
+st.title("Premium HTML File-Based SEO Page Generator")
 
 # ---------------- UI ---------------- #
 
-st.markdown("### *Paste HTML Template (Inline CSS Required)*")
-html_template = st.text_area(
-    "HTML Template",
-    height=300,
-    placeholder="Paste FULL HTML here (with <style> inside)"
+html_file = st.file_uploader(
+    "Upload HTML Template File (Inline CSS inside <style>)",
+    type=["html"]
 )
 
-st.markdown("### *Keywords Input*")
 keyword_text = st.text_area(
-    "Paste keywords (one per line)",
+    "Paste Keywords (one per line)",
     height=120
 )
 
 keyword_file = st.file_uploader(
-    "Or upload CSV (column name: keyword)",
+    "Or upload keyword CSV (column name: keyword)",
     type=["csv"]
 )
 
@@ -43,7 +40,7 @@ city = st.text_input("City (optional)")
 st.markdown("### *OpenAI API Key*")
 api_key = st.text_input("API Key", type="password")
 
-generate = st.button("Generate Pages")
+generate = st.button("Generate SEO Pages")
 
 # ---------------- HELPERS ---------------- #
 
@@ -53,20 +50,19 @@ def get_keywords():
         return df["keyword"].dropna().tolist()
     return [k.strip() for k in keyword_text.split("\n") if k.strip()]
 
-def build_prompt(html, keyword):
+def build_prompt(html_content, keyword):
     return f"""
 You are an expert SEO content editor.
 
-STRICT RULES (ABSOLUTE):
+STRICT RULES:
 - DO NOT change HTML structure
 - DO NOT change CSS
 - DO NOT change images
 - DO NOT change buttons or CTA
-- DO NOT add new sections
-- ONLY replace existing text content
+- ONLY replace text content
 
 HTML TEMPLATE:
-{html}
+{html_content}
 
 SEO CONTEXT:
 Primary Keyword: {keyword}
@@ -80,35 +76,34 @@ TASK:
 - Apply NLP semantic optimization
 - Update city/location references
 - Improve content quality
-- Add meta title & description IF already present
-- Add FAQ schema ONLY if FAQ section exists
+- Add meta title & description if present
+- Add FAQ schema only if template contains FAQ
 
 OUTPUT:
-Return FULL HTML ONLY.
-NO explanations.
+Return FULL HTML ONLY. NO explanations.
 """
 
 # ---------------- MAIN ---------------- #
 
 if generate:
-    if not html_template or not api_key:
-        st.error("HTML template and API key are required.")
+    if not html_file or not api_key:
+        st.error("Please upload HTML file and enter OpenAI API key.")
     else:
         keywords = get_keywords()
         if not keywords:
-            st.error("Please add at least one keyword.")
+            st.error("Add at least one keyword or CSV.")
         else:
             client = OpenAI(api_key=api_key)
+            html_content = html_file.read().decode("utf-8")
 
             zip_buffer = BytesIO()
-
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
                 for kw in keywords:
                     response = client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": "You strictly preserve HTML layout."},
-                            {"role": "user", "content": build_prompt(html_template, kw)}
+                            {"role": "user", "content": build_prompt(html_content, kw)}
                         ],
                         temperature=0.5
                     )
